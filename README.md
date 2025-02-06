@@ -1,6 +1,6 @@
 # Invenio i18n Formatter
 
-A command-line tool to automatically convert Python string formatting in InvenioRDM translation calls (`_()`) from new-style `{}` to old-style `%()` formatting, for compatibility with InvenioRDM's i18n system.
+A command-line tool to semi-automatically convert Python string formatting in InvenioRDM translation calls (`_()` and `lazy_gettext()`) from new-style `{}` to old-style `%()` formatting, for compatibility with InvenioRDM's i18n system. The tool also logs errors for f-strings found in translation calls.
 
 ## Installation
 
