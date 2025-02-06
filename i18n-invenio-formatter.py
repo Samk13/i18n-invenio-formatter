@@ -21,6 +21,11 @@ def calculate_offset(lines, lineno, col_offset):
     return sum(len(line) + 1 for line in lines[: lineno - 1]) + col_offset
 
 
+def log_error(filepath, lineno, message):
+    """Log an error message with file name and line number."""
+    print(f"Error in {filepath} at line {lineno}: {message}")
+
+
 def process_file(filepath):
     """Process a single Python file to update translation string formatting."""
     with open(filepath, "r", encoding="utf-8") as f:
@@ -53,6 +58,7 @@ def process_file(filepath):
                     lines, func_call.end_lineno, func_call.end_col_offset
                 )
                 original_call = source[start:end]
+                print(f"Identified string for formatting: {original_call}")
 
                 # Modify the string to use %()s
                 string_node = func_call.args[0]
@@ -82,30 +88,7 @@ def process_file(filepath):
             if node.args and isinstance(node.args[0], (ast.JoinedStr, ast.Constant)):
                 string_node = node.args[0]
                 if isinstance(string_node, ast.JoinedStr):
-                    # Convert f-string to %()s and extract variables
-                    parts = []
-                    variables = set()
-                    for part in string_node.values:
-                        if isinstance(part, ast.Constant):
-                            parts.append(part.value)
-                        elif isinstance(part, ast.FormattedValue):
-                            if isinstance(part.value, ast.Name):
-                                var_name = part.value.id
-                                parts.append(f"%({var_name})s")
-                                variables.add(var_name)
-                    modified_str = "".join(parts)
-
-                    # Generate keyword arguments
-                    kwargs = [f"{var}={var}" for var in variables]
-                    new_call = f'_("{modified_str}"'
-                    if kwargs:
-                        new_call += f", {', '.join(kwargs)}"
-                    new_call += ")"
-
-                    # Replace original call
-                    start = calculate_offset(lines, node.lineno, node.col_offset)
-                    end = calculate_offset(lines, node.end_lineno, node.end_col_offset)
-                    substitutions.append((start, end, new_call))
+                    log_error(filepath, node.lineno, "f-string found in _() call")
 
     # Apply changes in reverse order
     for start, end, new in sorted(substitutions, reverse=True, key=lambda x: x[0]):
