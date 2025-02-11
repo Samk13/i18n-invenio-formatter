@@ -6,14 +6,15 @@ from pathlib import Path
 
 
 def find_translation_imports(tree):
-    """Find imports of gettext or lazy_gettext from invenio_i18n and return their aliases."""
-    aliases = set()
+    """Find imports of gettext or lazy_gettext from invenio_i18n and return their aliases with types."""
+    translations = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "invenio_i18n":
             for alias in node.names:
                 if alias.name in ("gettext", "lazy_gettext"):
-                    aliases.add(alias.asname or alias.name)
-    return aliases
+                    alias_name = alias.asname or alias.name
+                    translations[alias_name] = alias.name
+    return translations
 
 
 def calculate_offset(lines, lineno, col_offset):
@@ -52,24 +53,35 @@ def process_file(filepath):
                 and isinstance(func_call.func, ast.Name)
                 and func_call.func.id in translation_aliases
             ):
+                trans_type = translation_aliases[func_call.func.id]
+
                 # Get the original translation call
                 start = calculate_offset(lines, func_call.lineno, func_call.col_offset)
                 end = calculate_offset(
                     lines, func_call.end_lineno, func_call.end_col_offset
                 )
                 original_call = source[start:end]
-                print(f"Identified string for formatting: {original_call}")
 
                 # Modify the string to use %()s
                 string_node = func_call.args[0]
                 original_str = string_node.value
                 modified_str = re.sub(r"{(\w+)}", r"%(\1)s", original_str)
 
-                # Collect keywords from .format()
-                format_kwargs = [
-                    f"{k.arg}={ast.unparse(k.value)}" for k in node.keywords
-                ]
-                new_call = f'_("{modified_str}", {", ".join(format_kwargs)})'
+                # Process based on translation type
+                if trans_type == "gettext":
+                    # Generate % substitution with dictionary
+                    format_dict_parts = [
+                        f'"{k.arg}": {ast.unparse(k.value)}' for k in node.keywords
+                    ]
+                    format_dict = "{" + ", ".join(format_dict_parts) + "}"
+                    new_call = f'_("{modified_str}") % {format_dict}'
+                elif trans_type == "lazy_gettext":
+                    # Generate keyword arguments in the translation call
+                    format_kwargs = [
+                        f"{k.arg}={ast.unparse(k.value)}" for k in node.keywords
+                    ]
+                    kw_args = ", ".join(format_kwargs)
+                    new_call = f'_("{modified_str}", {kw_args})' if kw_args else f'_("{modified_str}")'
 
                 # Replace entire .format() call
                 full_start = calculate_offset(
