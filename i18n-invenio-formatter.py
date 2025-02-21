@@ -2,6 +2,7 @@ import argparse
 import ast
 import re
 import os
+import string
 from pathlib import Path
 
 
@@ -25,6 +26,28 @@ def calculate_offset(lines, lineno, col_offset):
 def log_error(filepath, lineno, message):
     """Log an error message with file name and line number."""
     print(f"Error in {filepath} at line {lineno}: {message}")
+
+
+def get_original_quote_style(source, string_node):
+    """Determine the original quote style (single or double) from the source code."""
+    start = calculate_offset(
+        source.split("\n"), string_node.lineno, string_node.col_offset
+    )
+    # Look at the character just before the string content
+    while start > 0 and source[start - 1] in " \t(":
+        start -= 1
+    if start > 0 and source[start - 1] in "'\"":
+        return source[start - 1]
+    return '"'  # Default to double quotes if unclear
+
+
+def escape_string_for_quotes(value, quote_char):
+    """Escape quotes in a string based on the desired wrapping quote character."""
+    if quote_char == '"':
+        return value.replace('"', '\\"')
+    elif quote_char == "'":
+        return value.replace("'", "\\'")
+    return value
 
 
 def process_file(filepath):
@@ -60,12 +83,34 @@ def process_file(filepath):
                 end = calculate_offset(
                     lines, func_call.end_lineno, func_call.end_col_offset
                 )
-                original_call = source[start:end]
 
-                # Modify the string to use %()s
+                # Get the translation string
                 string_node = func_call.args[0]
                 original_str = string_node.value
+
+                # Check for positional placeholders
+                formatter = string.Formatter()
+                parsed = list(formatter.parse(original_str))
+                for literal, field_name, format_spec, conversion in parsed:
+                    if field_name is not None and (
+                        field_name == "" or field_name.isdigit()
+                    ):
+                        log_error(
+                            filepath,
+                            string_node.lineno,
+                            "Positional placeholders found in translation string",
+                        )
+                        continue  # Skip this node
+
+                # Modify the string to use %()s for named placeholders
                 modified_str = re.sub(r"{(\w+)}", r"%(\1)s", original_str)
+
+                # Get the original quote style and escape accordingly
+                quote_char = get_original_quote_style(source, string_node)
+                modified_str_escaped = escape_string_for_quotes(
+                    modified_str, quote_char
+                )
+                modified_str_literal = f"{quote_char}{modified_str_escaped}{quote_char}"
 
                 # Process based on translation type
                 if trans_type == "gettext":
@@ -74,14 +119,18 @@ def process_file(filepath):
                         f'"{k.arg}": {ast.unparse(k.value)}' for k in node.keywords
                     ]
                     format_dict = "{" + ", ".join(format_dict_parts) + "}"
-                    new_call = f'_("{modified_str}") % {format_dict}'
+                    new_call = f"_({modified_str_literal}) % {format_dict}"
                 elif trans_type == "lazy_gettext":
                     # Generate keyword arguments in the translation call
                     format_kwargs = [
                         f"{k.arg}={ast.unparse(k.value)}" for k in node.keywords
                     ]
                     kw_args = ", ".join(format_kwargs)
-                    new_call = f'_("{modified_str}", {kw_args})' if kw_args else f'_("{modified_str}")'
+                    new_call = (
+                        f"_({modified_str_literal}, {kw_args})"
+                        if kw_args
+                        else f"_({modified_str_literal})"
+                    )
 
                 # Replace entire .format() call
                 full_start = calculate_offset(
